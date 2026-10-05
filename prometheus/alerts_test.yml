@@ -1,0 +1,632 @@
+# Unit tests for alerts.yml: promtool test rules alerts_test.yml
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Port 443 has no healthy target while port 80 is fine: only 443 must fire.
+  # Two exporter instances (restart on a new port) must not duplicate the alert.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_load_balancer_target_healthy{instance="a:1",load_balancer="lb",target_type="server",server="web-1",server_id="1",ip="",listen_port="80"}'
+        values: '1x10'
+      - series: 'hetzner_cloud_load_balancer_target_healthy{instance="a:1",load_balancer="lb",target_type="server",server="web-1",server_id="1",ip="",listen_port="443"}'
+        values: '0x10'
+      - series: 'hetzner_cloud_load_balancer_target_healthy{instance="b:2",load_balancer="lb",target_type="server",server="web-1",server_id="1",ip="",listen_port="443"}'
+        values: '0x10'
+      - series: 'hetzner_cloud_load_balancer_target_health_status{instance="a:1",load_balancer="lb",target_type="server",server="web-1",server_id="1",ip="",listen_port="443",status="unhealthy",detail="layer4_no_connection",http_status_code=""}'
+        values: '1x10'
+      # A new service whose only target is still "unknown" doesn't page.
+      - series: 'hetzner_cloud_load_balancer_target_healthy{instance="a:1",load_balancer="new",target_type="server",server="web-2",server_id="2",ip="",listen_port="443"}'
+        values: '0x10'
+      - series: 'hetzner_cloud_load_balancer_target_health_status{instance="a:1",load_balancer="new",target_type="server",server="web-2",server_id="2",ip="",listen_port="443",status="unknown",detail="",http_status_code=""}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HetznerCloudLoadBalancerServiceNoHealthyTargets
+        exp_alerts:
+          - exp_labels: {severity: critical, load_balancer: lb, listen_port: "443"}
+            exp_annotations:
+              summary: "Load Balancer lb has no healthy target on port 443"
+              description: "No target of lb passes the health check for the service on port 443; that service is not being served."
+
+  # The unhealthy alert names the target and looks up the reason; a changing
+  # reason doesn't restart the timer; unknown status doesn't fire.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_load_balancer_target_health_status{load_balancer="lb",target_type="ip",server="",server_id="",ip="10.0.0.5",listen_port="443",status="unhealthy",detail="layer4_timeout",http_status_code=""}'
+        values: '1x3 stale'
+      - series: 'hetzner_cloud_load_balancer_target_health_status{load_balancer="lb",target_type="ip",server="",server_id="",ip="10.0.0.5",listen_port="443",status="unhealthy",detail="unexpected_http_status",http_status_code="502"}'
+        values: '_x3 1x10'
+      - series: 'hetzner_cloud_load_balancer_target_health_status{load_balancer="lb",target_type="server",server="web-2",server_id="2",ip="",listen_port="443",status="unknown",detail="",http_status_code=""}'
+        values: '1x13'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HetznerCloudLoadBalancerTargetUnhealthy
+        exp_alerts:
+          - exp_labels: {severity: warning, load_balancer: lb, target_type: ip, ip: 10.0.0.5, listen_port: "443"}
+            exp_annotations:
+              summary: "Target 10.0.0.5 of lb is unhealthy on port 443"
+              description: "Reason: unexpected_http_status 502 (layer4_* = network/firewall/host, layer7_*/unexpected_http_* = application)."
+
+  # Services but no targets fires; no services and no targets doesn't.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_load_balancer_targets{load_balancer="empty"}'
+        values: '0x15'
+      - series: 'hetzner_cloud_load_balancer_services{load_balancer="empty"}'
+        values: '1x15'
+      - series: 'hetzner_cloud_load_balancer_targets{load_balancer="unused"}'
+        values: '0x15'
+      - series: 'hetzner_cloud_load_balancer_services{load_balancer="unused"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: HetznerCloudLoadBalancerWithoutTargets
+        exp_alerts:
+          - exp_labels: {severity: critical, load_balancer: empty}
+            exp_annotations:
+              summary: "Load Balancer empty has services but no targets"
+              description: "E.g. a label selector that matches no servers. Traffic to empty is not being served."
+
+  # Failed renewal fires; completed issuance doesn't.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_certificate_status{certificate="shop",certificate_id="1",process="renewal",status="failed"}'
+        values: '1x15'
+      - series: 'hetzner_cloud_certificate_status{certificate="shop",certificate_id="1",process="issuance",status="completed"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: HetznerCloudCertificateFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, certificate: shop, process: renewal}
+            exp_annotations:
+              summary: "Managed certificate shop: renewal failed"
+              description: "Hetzner could not issue or renew the certificate (often DNS not pointing to Hetzner). A failed issuance has no expiry date, so the expiry alerts can't catch it."
+
+  # CPU as a ratio of all vCPUs: 0.875 doesn't fire, 0.95 does.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_server_cpu_usage_ratio{server="busy"}'
+        values: '0.95x40'
+      - series: 'hetzner_cloud_server_cpu_usage_ratio{server="fine"}'
+        values: '0.875x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: HetznerCloudServerCPUHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, server: busy}
+            exp_annotations:
+              summary: "Server busy CPU at 95% for 30 minutes"
+              description: "CPU usage across all vCPUs (100% = all vCPUs busy). Consider a larger server type."
+
+  # 429 responses fire the rate limit alert; no 429 doesn't.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_exporter_api_responses_total{instance="a:1",code="429"}'
+        values: '0 0 0 3 3 3'
+      - series: 'hetzner_cloud_exporter_api_responses_total{instance="a:1",code="200"}'
+        values: '10 20 30 40 50 60'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HetznerCloudAPIRateLimited
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: HetznerCloudAPIRateLimited
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Hetzner API rate limit reached
+              description: "The API answered with HTTP 429 (3 times in the last 15 minutes). The exporter polls less often until it recovers (hetzner_cloud_exporter_poll_interval_seconds); check other tools using the same project."
+
+  # Unassigned IPv4 fires after 24h; assigned and free IPv6 don't.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_primary_ip_assigned{primary_ip="spare"}'
+        values: '0x1600'
+      - series: 'hetzner_cloud_primary_ip_monthly_price{primary_ip="spare",currency="EUR"}'
+        values: '0.5x1600'
+      - series: 'hetzner_cloud_primary_ip_assigned{primary_ip="used"}'
+        values: '1x1600'
+      - series: 'hetzner_cloud_primary_ip_monthly_price{primary_ip="used",currency="EUR"}'
+        values: '0.5x1600'
+      - series: 'hetzner_cloud_primary_ip_assigned{primary_ip="v6"}'
+        values: '0x1600'
+    alert_rule_test:
+      - eval_time: 23h
+        alertname: HetznerCloudUnassignedPrimaryIP
+        exp_alerts: []
+      - eval_time: 26h
+        alertname: HetznerCloudUnassignedPrimaryIP
+        exp_alerts:
+          - exp_labels: {severity: info, primary_ip: spare}
+            exp_annotations:
+              summary: "Primary IP spare is not assigned but costs money"
+              description: "Unassigned for more than a day. Delete it if it isn't kept on purpose."
+
+  # Storage Box at 95 % fires, 50 % doesn't.
+  - interval: 5m
+    input_series:
+      - series: 'hetzner_cloud_storage_box_used_bytes{storage_box="full"}'
+        values: '95x20'
+      - series: 'hetzner_cloud_storage_box_quota_bytes{storage_box="full"}'
+        values: '100x20'
+      - series: 'hetzner_cloud_storage_box_used_bytes{storage_box="ok"}'
+        values: '50x20'
+      - series: 'hetzner_cloud_storage_box_quota_bytes{storage_box="ok"}'
+        values: '100x20'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: HetznerCloudStorageBoxAlmostFull
+        exp_alerts:
+          - exp_labels: {severity: warning, storage_box: full}
+            exp_annotations:
+              summary: "Storage Box full is 95% full"
+              description: "Backups writing to it may fail soon. Delete old data or snapshots, or use a larger type."
+
+  # Cost from 100 to 130 EUR within a week fires (+30 %); before, no alert.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_server_monthly_price{server="a",currency="EUR"}'
+        values: '100x10400'
+      - series: 'hetzner_cloud_server_monthly_price{server="b",currency="EUR"}'
+        values: '_x10140 30x300'
+    alert_rule_test:
+      - eval_time: 7d
+        alertname: HetznerCloudMonthlyCostIncreased
+        exp_alerts: []
+      - eval_time: 171h
+        alertname: HetznerCloudMonthlyCostIncreased
+        exp_alerts:
+          - exp_labels: {severity: info}
+            exp_annotations:
+              summary: "Hetzner monthly cost rose to 130 (more than 20% above last week)"
+              description: "Net, without VAT, in the account's currency. Check new or resized servers, Load Balancers, volumes and snapshots."
+
+  # Stale data is relative to the source's interval: an hourly source isn't
+  # stale after 20 minutes, a per-minute source is.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_exporter_last_success_timestamp_seconds{source="pricing"}'
+        values: '0x60'
+      - series: 'hetzner_cloud_exporter_source_interval_seconds{source="pricing"}'
+        values: '3600x60'
+      - series: 'hetzner_cloud_exporter_last_success_timestamp_seconds{source="servers"}'
+        values: '0x60'
+      - series: 'hetzner_cloud_exporter_source_interval_seconds{source="servers"}'
+        values: '60x60'
+      - series: 'hetzner_cloud_exporter_poll_interval_seconds'
+        values: '60x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: HetznerCloudExporterDataStale
+        exp_alerts:
+          - exp_labels: {severity: warning, source: servers}
+            exp_annotations:
+              summary: "Hetzner data for servers is stale"
+              description: "The servers list hasn't been fetched for 30m 0s; dashboards show old data. (A source that never succeeded since start is covered by HetznerCloudExporterPollFailing.)"
+
+  # Backing off after HTTP 429 (poll interval 16 minutes): not stale until 3
+  # poll intervals have passed.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_exporter_last_success_timestamp_seconds{source="servers"}'
+        values: '0x70'
+      - series: 'hetzner_cloud_exporter_source_interval_seconds{source="servers"}'
+        values: '60x70'
+      - series: 'hetzner_cloud_exporter_poll_interval_seconds'
+        values: '960x70'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: HetznerCloudExporterDataStale
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: HetznerCloudExporterDataStale
+        exp_alerts:
+          - exp_labels: {severity: warning, source: servers}
+            exp_annotations:
+              summary: "Hetzner data for servers is stale"
+              description: "The servers list hasn't been fetched for 1h 0m 0s; dashboards show old data. (A source that never succeeded since start is covered by HetznerCloudExporterPollFailing.)"
+
+  # The first 429 after a start is seen (the counter exists from 0).
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_exporter_api_responses_total{code="429"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HetznerCloudAPIRateLimited
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Hetzner API rate limit reached
+              description: "The API answered with HTTP 429 (1 times in the last 15 minutes). The exporter polls less often until it recovers (hetzner_cloud_exporter_poll_interval_seconds); check other tools using the same project."
+
+  # Failures that alternate with successes (per-item metrics) still fire.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_exporter_last_poll_success{source="servers"}'
+        values: '0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1'
+      - series: 'hetzner_cloud_exporter_poll_errors_total{source="servers"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: HetznerCloudExporterPollFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, source: servers}
+            exp_annotations:
+              summary: "Hetzner API polling fails for servers"
+              description: "Polls of servers keep failing. Check the exporter log (e.g. 401 = wrong token)."
+
+  # Off is info, stuck in a transition is a warning; running fires nothing.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_server_info{server="a",server_id="1",status="off",server_type="cx22",location="fsn1"}'
+        values: '1x30'
+      - series: 'hetzner_cloud_server_info{server="b",server_id="2",status="migrating",server_type="cx22",location="fsn1"}'
+        values: '1x30'
+      - series: 'hetzner_cloud_server_info{server="c",server_id="3",status="running",server_type="cx22",location="fsn1"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HetznerCloudServerOff
+        exp_alerts:
+          - exp_labels: {severity: info, server: a}
+            exp_annotations:
+              summary: "Server a is off"
+              description: "Hetzner reports server a as off. Silence this alert if it is off on purpose."
+      - eval_time: 20m
+        alertname: HetznerCloudServerStuck
+        exp_alerts:
+          - exp_labels: {severity: warning, server: b, status: migrating}
+            exp_annotations:
+              summary: "Server b is migrating for 15 minutes"
+              description: "The server is stuck in a transition (starting, stopping, migrating, rebuilding, ...)."
+
+  # Expiry: soon and critical don't fire together; an expired certificate
+  # gets its own alert instead of "expires in -10 days".
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_certificate_not_valid_after_timestamp_seconds{certificate="soon",certificate_id="1",certificate_type="uploaded"}'
+        values: '864000x100'
+      - series: 'hetzner_cloud_certificate_not_valid_after_timestamp_seconds{certificate="critical",certificate_id="2",certificate_type="uploaded"}'
+        values: '172800x100'
+      - series: 'hetzner_cloud_certificate_not_valid_after_timestamp_seconds{certificate="expired",certificate_id="3",certificate_type="uploaded"}'
+        values: '-864000x100'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: HetznerCloudCertificateExpiringSoon
+        exp_alerts:
+          - exp_labels: {severity: warning, certificate: soon}
+            exp_annotations:
+              summary: "Certificate soon expires in 9.951 days"
+              description: Managed certificates renew automatically; if this fires for one, renewal is failing.
+      - eval_time: 70m
+        alertname: HetznerCloudCertificateExpiringCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, certificate: critical}
+            exp_annotations:
+              summary: "Certificate critical expires in 1.951 days"
+              description: "Less than 3 days left. Managed certificates renew automatically, so renewal is failing; replace uploaded certificates now."
+      - eval_time: 70m
+        alertname: HetznerCloudCertificateExpired
+        exp_alerts:
+          - exp_labels: {severity: critical, certificate: expired}
+            exp_annotations:
+              summary: "Certificate expired has expired"
+              description: "Replace it, or delete it if no Load Balancer uses it anymore."
+
+  # Backups enabled: fires when the newest backup is older than 2 days. Not
+  # for a new server (web-3), backups enabled recently (web-4), or a server
+  # with no backup at all yet that is new (web-3 has no last_backup series).
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_exporter_last_success_timestamp_seconds{source="images"}'
+        values: '0x3700'
+      - series: 'hetzner_cloud_server_backup_enabled{server="web-1"}'
+        values: '1x3700'
+      - series: 'hetzner_cloud_server_created_timestamp_seconds{server="web-1"}'
+        values: '0x3700'
+      - series: 'hetzner_cloud_server_last_backup_timestamp_seconds{server="web-1"}'
+        values: '0x3700'
+      - series: 'hetzner_cloud_server_backup_enabled{server="web-2"}'
+        values: '1x3700'
+      - series: 'hetzner_cloud_server_created_timestamp_seconds{server="web-2"}'
+        values: '0x3700'
+      - series: 'hetzner_cloud_server_last_backup_timestamp_seconds{server="web-2"}'
+        values: '200000x3700'
+      - series: 'hetzner_cloud_server_backup_enabled{server="web-3"}'
+        values: '_x2500 1x1200'
+      - series: 'hetzner_cloud_server_created_timestamp_seconds{server="web-3"}'
+        values: '_x2500 150000x1200'
+      - series: 'hetzner_cloud_server_backup_enabled{server="web-4"}'
+        values: '0x1800 1x1900'
+      - series: 'hetzner_cloud_server_created_timestamp_seconds{server="web-4"}'
+        values: '0x3700'
+    alert_rule_test:
+      - eval_time: 60h
+        alertname: HetznerCloudServerBackupMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, server: web-1}
+            exp_annotations:
+              summary: "Server web-1 has backups enabled but no backup in the last 2 days"
+              description: "Hetzner creates backups daily. Check the server's backup window and the Hetzner Console."
+
+  # Images collector off: no last_backup metric, so no backup alert.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_server_backup_enabled{server="web-1"}'
+        values: '1x3700'
+      - series: 'hetzner_cloud_server_created_timestamp_seconds{server="web-1"}'
+        values: '0x3700'
+    alert_rule_test:
+      - eval_time: 60h
+        alertname: HetznerCloudServerBackupMissing
+        exp_alerts: []
+
+  # A job's exporter disappears while another job is still scraped: fires for
+  # that job until 24 hours after its last metrics.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_exporter_build_info{job="hetzner"}'
+        values: '1x60'
+      - series: 'hetzner_cloud_exporter_build_info{job="other"}'
+        values: '1x2000'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: HetznerCloudExporterDown
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: HetznerCloudExporterDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: hetzner}
+            exp_annotations:
+              summary: "Hetzner exporter hetzner is not being scraped"
+              description: "No metrics from hetzner_cloud_exporter (job hetzner) for 5 minutes. The alert resolves by itself 24 hours after a job's last metrics, unless no exporter is left at all."
+      - eval_time: 23h
+        alertname: HetznerCloudExporterDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: hetzner}
+            exp_annotations:
+              summary: "Hetzner exporter hetzner is not being scraped"
+              description: "No metrics from hetzner_cloud_exporter (job hetzner) for 5 minutes. The alert resolves by itself 24 hours after a job's last metrics, unless no exporter is left at all."
+      - eval_time: 26h
+        alertname: HetznerCloudExporterDown
+        exp_alerts: []
+
+  # No exporter at all (absent): fires without a job label.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="node"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HetznerCloudExporterDown
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Hetzner exporter is not being scraped"
+              description: "No metrics from hetzner_cloud_exporter for 5 minutes. The alert resolves by itself 24 hours after a job's last metrics, unless no exporter is left at all."
+
+  # Old snapshots fire, delete-protected ones don't; same description, different IDs.
+  # Snapshot 3 is young. Snapshots 1 and 2 are 92 days old at 2h.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_image_info{image="nightly",image_id="1",image_type="snapshot",status="available",server="a",server_id="1"}'
+        values: '1x180'
+      - series: 'hetzner_cloud_image_created_timestamp_seconds{image="nightly",image_id="1"}'
+        values: '-7941600x180'
+      - series: 'hetzner_cloud_image_delete_protection{image="nightly",image_id="1"}'
+        values: '0x180'
+      - series: 'hetzner_cloud_image_info{image="nightly",image_id="2",image_type="snapshot",status="available",server="a",server_id="1"}'
+        values: '1x180'
+      - series: 'hetzner_cloud_image_created_timestamp_seconds{image="nightly",image_id="2"}'
+        values: '-7941600x180'
+      - series: 'hetzner_cloud_image_delete_protection{image="nightly",image_id="2"}'
+        values: '1x180'
+      - series: 'hetzner_cloud_image_info{image="nightly",image_id="3",image_type="snapshot",status="available",server="a",server_id="1"}'
+        values: '1x180'
+      - series: 'hetzner_cloud_image_created_timestamp_seconds{image="nightly",image_id="3"}'
+        values: '0x180'
+      - series: 'hetzner_cloud_image_delete_protection{image="nightly",image_id="3"}'
+        values: '0x180'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: HetznerCloudOldSnapshot
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: HetznerCloudOldSnapshot
+        exp_alerts:
+          - exp_labels: {severity: info, image: nightly, image_id: "1"}
+            exp_annotations:
+              summary: "Snapshot nightly (1) is 92 days old"
+              description: "Snapshots are billed per GB and month. Delete it if it isn't needed anymore, or enable delete protection to keep it without this alert."
+
+  # Exporter and API budget alerts. Job "other" has no hetzner exporter, so
+  # its /metrics errors are not ours.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_exporter_build_info{job="hetzner"}'
+        values: '1x60'
+      - series: 'promhttp_metric_handler_errors_total{job="hetzner",cause="gathering"}'
+        values: '0+1x60'
+      - series: 'promhttp_metric_handler_errors_total{job="other",cause="gathering"}'
+        values: '0+1x60'
+      - series: 'hetzner_cloud_exporter_api_rate_limit_remaining{job="hetzner"}'
+        values: '200x60'
+      - series: 'hetzner_cloud_exporter_api_requests_per_hour_estimate{job="hetzner"}'
+        values: '3200x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HetznerCloudExporterMetricErrors
+        exp_alerts:
+          - exp_labels: {severity: warning, job: hetzner}
+            exp_annotations:
+              summary: "Hetzner exporter hetzner reports errors while serving metrics"
+              description: "Some metrics were dropped from /metrics (e.g. duplicate series). Check the exporter log."
+      - eval_time: 15m
+        alertname: HetznerCloudAPIRateLimitLow
+        exp_alerts:
+          - exp_labels: {severity: warning, job: hetzner}
+            exp_annotations:
+              summary: Hetzner API rate limit almost used up
+              description: "Only 200 API requests left in the current window. Other tools in the project share this limit."
+      - eval_time: 20m
+        alertname: HetznerCloudAPIUsageTooHigh
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: HetznerCloudAPIUsageTooHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, job: hetzner}
+            exp_annotations:
+              summary: Hetzner exporter uses most of the API rate limit
+              description: "The exporter needs about 3.2k requests/hour of 3600. Increase --hcloud.metrics-interval (or set it to 0), increase --hcloud.poll-interval, or turn off collectors."
+
+  # Server alerts: web-1 locked for 40 minutes fires, web-2 locked for 10 doesn't.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_server_locked{server="web-1"}'
+        values: '1x80'
+      - series: 'hetzner_cloud_server_locked{server="web-2"}'
+        values: '0x30 1x10 0x40'
+      - series: 'hetzner_cloud_server_outgoing_traffic_bytes{server="web-1"}'
+        values: '3298534883328x80'
+      - series: 'hetzner_cloud_server_included_traffic_bytes{server="web-1"}'
+        values: '1099511627776x80'
+      - series: 'hetzner_cloud_server_traffic_price_per_tb{server="web-1",currency="EUR"}'
+        values: '1x80'
+      - series: 'hetzner_cloud_server_type_deprecated{server="web-1"}'
+        values: '1x80'
+      - series: 'hetzner_cloud_server_type_deprecated{server="web-2"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: HetznerCloudServerLocked
+        exp_alerts:
+          - exp_labels: {severity: warning, server: web-1}
+            exp_annotations:
+              summary: "Server web-1 is locked for 30 minutes"
+              description: "Hetzner locks a server during actions; a long lock can mean a stuck action."
+      - eval_time: 70m
+        alertname: HetznerCloudServerTrafficHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, server: web-1}
+            exp_annotations:
+              summary: "Server web-1 used 300% of included traffic"
+              description: Traffic over the included amount is billed.
+      - eval_time: 70m
+        alertname: HetznerCloudServerTrafficOverage
+        exp_alerts:
+          - exp_labels: {severity: info, server: web-1}
+            exp_annotations:
+              summary: "Server web-1 traffic over the included amount costs about 2 this billing period"
+              description: Net, without VAT, in the account's currency.
+      - eval_time: 70m
+        alertname: HetznerCloudServerTypeDeprecated
+        exp_alerts:
+          - exp_labels: {severity: info, server: web-1}
+            exp_annotations:
+              summary: "Server type of web-1 is deprecated in its location"
+              description: "See hetzner_cloud_server_type_unavailable_after_timestamp_seconds for the date after which it can no longer be ordered; plan a migration."
+
+  # Load Balancer limits: 4 of 5 targets (80 %) counts as near the limit,
+  # 1 of 15 services doesn't.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_load_balancer_targets{load_balancer="lb"}'
+        values: '4x80'
+      - series: 'hetzner_cloud_load_balancer_max_targets{load_balancer="lb"}'
+        values: '5x80'
+      - series: 'hetzner_cloud_load_balancer_services{load_balancer="lb"}'
+        values: '1x80'
+      - series: 'hetzner_cloud_load_balancer_max_services{load_balancer="lb"}'
+        values: '15x80'
+      - series: 'hetzner_cloud_load_balancer_open_connections{load_balancer="lb"}'
+        values: '9000x80'
+      - series: 'hetzner_cloud_load_balancer_max_connections{load_balancer="lb"}'
+        values: '10000x80'
+      - series: 'hetzner_cloud_load_balancer_outgoing_traffic_bytes{load_balancer="lb"}'
+        values: '900x80'
+      - series: 'hetzner_cloud_load_balancer_included_traffic_bytes{load_balancer="lb"}'
+        values: '1000x80'
+      - series: 'hetzner_cloud_load_balancer_type_deprecated{load_balancer="lb"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HetznerCloudLoadBalancerCapacityNearLimit
+        exp_alerts:
+          - exp_labels: {severity: warning, load_balancer: lb}
+            exp_annotations:
+              summary: "Load Balancer lb is close to its target, service or certificate limit"
+              description: "Adding more targets, services or certificates may fail; consider a larger Load Balancer type."
+      - eval_time: 10m
+        alertname: HetznerCloudLoadBalancerConnectionsNearLimit
+        exp_alerts:
+          - exp_labels: {severity: warning, load_balancer: lb}
+            exp_annotations:
+              summary: "Load Balancer lb uses 90% of its connection limit"
+              description: "Open connections are close to the maximum of the Load Balancer type. New connections may be refused; consider a larger type."
+      - eval_time: 70m
+        alertname: HetznerCloudLoadBalancerTrafficHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, load_balancer: lb}
+            exp_annotations:
+              summary: "Load Balancer lb used 90% of included traffic"
+              description: Traffic over the included amount is billed.
+      - eval_time: 70m
+        alertname: HetznerCloudLoadBalancerTypeDeprecated
+        exp_alerts:
+          - exp_labels: {severity: info, load_balancer: lb}
+            exp_annotations:
+              summary: "Load Balancer type of lb is deprecated"
+              description: "See hetzner_cloud_load_balancer_type_unavailable_after_timestamp_seconds; plan a migration to a current type."
+
+  # Certificate renewal unavailable; blocked IPs; unused resources after a day.
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_certificate_status{certificate="c",process="renewal",status="unavailable"}'
+        values: '1x1600'
+      - series: 'hetzner_cloud_floating_ip_blocked{floating_ip="f"}'
+        values: '1x1600'
+      - series: 'hetzner_cloud_primary_ip_blocked{primary_ip="p"}'
+        values: '0x1600'
+      - series: 'hetzner_cloud_floating_ip_assigned{floating_ip="f"}'
+        values: '0x1600'
+      - series: 'hetzner_cloud_volume_attached{volume="data"}'
+        values: '0x1600'
+      - series: 'hetzner_cloud_volume_attached{volume="db"}'
+        values: '1x1600'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: HetznerCloudCertificateRenewalUnavailable
+        exp_alerts:
+          - exp_labels: {severity: warning, certificate: c}
+            exp_annotations:
+              summary: "Managed certificate c can't be renewed"
+              description: "Hetzner reports renewal as unavailable; the certificate will expire unless this is resolved."
+      - eval_time: 10m
+        alertname: HetznerCloudIPBlocked
+        exp_alerts:
+          - exp_labels: {severity: critical, floating_ip: f}
+            exp_annotations:
+              summary: "IP f is blocked by Hetzner"
+              description: "Hetzner blocks IPs e.g. after abuse reports. Check your e-mail and the Hetzner Console."
+      - eval_time: 23h
+        alertname: HetznerCloudUnassignedFloatingIP
+        exp_alerts: []
+      - eval_time: 25h
+        alertname: HetznerCloudUnassignedFloatingIP
+        exp_alerts:
+          - exp_labels: {severity: info, floating_ip: f}
+            exp_annotations:
+              summary: "Floating IP f is not assigned but costs money"
+              description: "Unassigned for more than a day. Delete it if it isn't kept on purpose."
+      - eval_time: 25h
+        alertname: HetznerCloudUnattachedVolume
+        exp_alerts:
+          - exp_labels: {severity: info, volume: data}
+            exp_annotations:
+              summary: "Volume data is not attached but costs money"
+              description: "Not attached to a server for more than a day."

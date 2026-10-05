@@ -1,0 +1,833 @@
+# Tests for the Grafana dashboards: every panel query (queries.yml, generated
+# from the dashboard JSON by `go test ./internal/dashboards -update`) is evaluated
+# against a small Hetzner project and must return exactly these values.
+#   promtool test rules dashboards_test.yml
+#
+# Data (job "hetzner"): web-1 running in fsn1 and web-2 off in nbg1 (cx22, 2 vCPUs, 4 GiB);
+# lb-1 with web-1 healthy and web-2 unhealthy on port 443, lb-2 all healthy; volume "data"
+# unattached and "db" on web-1; primary IPs p1 (web-1), p2 (unassigned IPv4), p3 (IPv6 on
+# web-1), floating IP f1 (unassigned); snapshot "nightly" (100 days) and a backup of web-1;
+# Storage Box box1 half full; certificates "shop" (managed, 30 days) and "old" (2 days).
+# Instance "b" repeats some series (the exporter after a restart on a new port): no
+# duplicates. Job "other" (another Hetzner project) uses the same names: never shown.
+# All values are evaluated at 2h; timestamps are relative to that (7200s).
+rule_files:
+  - queries.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'hetzner_cloud_server_info{job="hetzner",instance="a",server="web-1",server_id="10",status="running",server_type="cx22",location="fsn1"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_server_running{job="hetzner",instance="a",server="web-1"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_server_cpu_cores{job="hetzner",instance="a",server="web-1"}'
+        values: '2x130'
+      - series: 'hetzner_cloud_server_memory_bytes{job="hetzner",instance="a",server="web-1"}'
+        values: '4294967296x130'
+      - series: 'hetzner_cloud_server_disk_bytes{job="hetzner",instance="a",server="web-1"}'
+        values: '42949672960x130'
+      - series: 'hetzner_cloud_server_monthly_price{job="hetzner",instance="a",server="web-1",currency="EUR"}'
+        values: '5x130'
+      - series: 'hetzner_cloud_server_traffic_price_per_tb{job="hetzner",instance="a",server="web-1",currency="EUR"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_server_included_traffic_bytes{job="hetzner",instance="a",server="web-1"}'
+        values: '1099511627776x130'
+      - series: 'hetzner_cloud_server_info{job="hetzner",instance="a",server="web-2",server_id="11",status="off",server_type="cx22",location="nbg1"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_server_running{job="hetzner",instance="a",server="web-2"}'
+        values: '0x130'
+      - series: 'hetzner_cloud_server_cpu_cores{job="hetzner",instance="a",server="web-2"}'
+        values: '2x130'
+      - series: 'hetzner_cloud_server_memory_bytes{job="hetzner",instance="a",server="web-2"}'
+        values: '4294967296x130'
+      - series: 'hetzner_cloud_server_disk_bytes{job="hetzner",instance="a",server="web-2"}'
+        values: '42949672960x130'
+      - series: 'hetzner_cloud_server_monthly_price{job="hetzner",instance="a",server="web-2",currency="EUR"}'
+        values: '5x130'
+      - series: 'hetzner_cloud_server_traffic_price_per_tb{job="hetzner",instance="a",server="web-2",currency="EUR"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_server_included_traffic_bytes{job="hetzner",instance="a",server="web-2"}'
+        values: '1099511627776x130'
+      - series: 'hetzner_cloud_server_backup_enabled{job="hetzner",instance="a",server="web-1"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_server_backup_enabled{job="hetzner",instance="a",server="web-2"}'
+        values: '0x130'
+      - series: 'hetzner_cloud_server_delete_protection{job="hetzner",instance="a",server="web-1"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_server_delete_protection{job="hetzner",instance="a",server="web-2"}'
+        values: '0x130'
+      - series: 'hetzner_cloud_server_type_deprecated{job="hetzner",instance="a",server="web-1"}'
+        values: '0x130'
+      - series: 'hetzner_cloud_server_type_deprecated{job="hetzner",instance="a",server="web-2"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_server_backup_monthly_price{job="hetzner",instance="a",server="web-1",currency="EUR"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_server_last_backup_timestamp_seconds{job="hetzner",instance="a",server="web-1"}'
+        values: '-122400x130'
+      - series: 'hetzner_cloud_server_outgoing_traffic_bytes{job="hetzner",instance="a",server="web-1"}'
+        values: '2199023255552x130'
+      - series: 'hetzner_cloud_server_outgoing_traffic_bytes{job="hetzner",instance="a",server="web-2"}'
+        values: '100x130'
+      - series: 'hetzner_cloud_server_cpu_usage_ratio{job="hetzner",instance="a",server="web-1"}'
+        values: '0.25x130'
+      - series: 'hetzner_cloud_server_cpu_usage_ratio{job="hetzner",instance="b",server="web-1"}'
+        values: '0.25x130'
+      - series: 'hetzner_cloud_server_disk_read_bytes_per_second{job="hetzner",instance="a",server="web-1",disk="0"}'
+        values: '1000x130'
+      - series: 'hetzner_cloud_server_disk_read_bytes_per_second{job="hetzner",instance="a",server="web-1",disk="1"}'
+        values: '500x130'
+      - series: 'hetzner_cloud_server_disk_read_bytes_per_second{job="hetzner",instance="b",server="web-1",disk="0"}'
+        values: '1000x130'
+      - series: 'hetzner_cloud_server_disk_write_bytes_per_second{job="hetzner",instance="a",server="web-1",disk="0"}'
+        values: '200x130'
+      - series: 'hetzner_cloud_server_disk_read_iops{job="hetzner",instance="a",server="web-1",disk="0"}'
+        values: '10x130'
+      - series: 'hetzner_cloud_server_disk_read_iops{job="hetzner",instance="a",server="web-1",disk="1"}'
+        values: '5x130'
+      - series: 'hetzner_cloud_server_disk_write_iops{job="hetzner",instance="a",server="web-1",disk="0"}'
+        values: '3x130'
+      - series: 'hetzner_cloud_server_network_in_bytes_per_second{job="hetzner",instance="a",server="web-1",interface="0"}'
+        values: '100x130'
+      - series: 'hetzner_cloud_server_network_out_bytes_per_second{job="hetzner",instance="a",server="web-1",interface="0"}'
+        values: '300x130'
+      - series: 'hetzner_cloud_server_network_in_packets_per_second{job="hetzner",instance="a",server="web-1",interface="0"}'
+        values: '7x130'
+      - series: 'hetzner_cloud_server_network_out_packets_per_second{job="hetzner",instance="a",server="web-1",interface="0"}'
+        values: '9x130'
+      - series: 'hetzner_cloud_load_balancer_info{job="hetzner",instance="a",load_balancer="lb-1",load_balancer_id="1",load_balancer_type="lb11",location="fsn1"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_load_balancer_monthly_price{job="hetzner",instance="a",load_balancer="lb-1",currency="EUR"}'
+        values: '5.5x130'
+      - series: 'hetzner_cloud_load_balancer_info{job="hetzner",instance="a",load_balancer="lb-2",load_balancer_id="2",load_balancer_type="lb11",location="fsn1"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_load_balancer_monthly_price{job="hetzner",instance="a",load_balancer="lb-2",currency="EUR"}'
+        values: '2x130'
+      - series: 'hetzner_cloud_load_balancer_open_connections{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '4000x130'
+      - series: 'hetzner_cloud_load_balancer_open_connections{job="hetzner",instance="b",load_balancer="lb-1"}'
+        values: '4000x130'
+      - series: 'hetzner_cloud_load_balancer_max_connections{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '10000x130'
+      - series: 'hetzner_cloud_load_balancer_targets{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '2x130'
+      - series: 'hetzner_cloud_load_balancer_max_targets{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '5x130'
+      - series: 'hetzner_cloud_load_balancer_services{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_load_balancer_max_services{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '5x130'
+      - series: 'hetzner_cloud_load_balancer_certificates{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_load_balancer_max_certificates{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '10x130'
+      - series: 'hetzner_cloud_load_balancer_outgoing_traffic_bytes{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '500x130'
+      - series: 'hetzner_cloud_load_balancer_included_traffic_bytes{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '1000x130'
+      - series: 'hetzner_cloud_load_balancer_requests_per_second{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '12x130'
+      - series: 'hetzner_cloud_load_balancer_connections_per_second{job="hetzner",instance="a",load_balancer="lb-1"}'
+        values: '3x130'
+      - series: 'hetzner_cloud_load_balancer_bandwidth_bytes_per_second{job="hetzner",instance="a",load_balancer="lb-1",direction="in"}'
+        values: '1000x130'
+      - series: 'hetzner_cloud_load_balancer_bandwidth_bytes_per_second{job="hetzner",instance="a",load_balancer="lb-1",direction="out"}'
+        values: '2000x130'
+      - series: 'hetzner_cloud_load_balancer_target_unhealthy_services{job="hetzner",instance="a",load_balancer="lb-1",target_type="server",ip="",server="web-1",server_id="10"}'
+        values: '0x130'
+      - series: 'hetzner_cloud_load_balancer_target_unhealthy_services{job="hetzner",instance="a",load_balancer="lb-1",target_type="server",ip="",server="web-2",server_id="11"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_load_balancer_target_health_status{job="hetzner",instance="a",load_balancer="lb-1",target_type="server",ip="",server="web-1",server_id="10",listen_port="443",status="healthy",detail="",http_status_code=""}'
+        values: '1x130'
+      - series: 'hetzner_cloud_load_balancer_target_health_status{job="hetzner",instance="a",load_balancer="lb-1",target_type="server",ip="",server="web-2",server_id="11",listen_port="443",status="unhealthy",detail="layer4_no_connection",http_status_code=""}'
+        values: '1x130'
+      - series: 'hetzner_cloud_load_balancer_target_unhealthy_services{job="hetzner",instance="a",load_balancer="lb-2",target_type="server",ip="",server="web-1",server_id="10"}'
+        values: '0x130'
+      - series: 'hetzner_cloud_load_balancer_target_health_status{job="hetzner",instance="a",load_balancer="lb-2",target_type="server",ip="",server="web-1",server_id="10",listen_port="80",status="healthy",detail="",http_status_code=""}'
+        values: '1x130'
+      - series: 'hetzner_cloud_volume_info{job="hetzner",instance="a",volume="data",volume_id="1",location="fsn1",status="available",server_id=""}'
+        values: '1x130'
+      - series: 'hetzner_cloud_volume_info{job="hetzner",instance="a",volume="db",volume_id="2",location="fsn1",status="available",server_id="10"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_volume_size_bytes{job="hetzner",instance="a",volume="data"}'
+        values: '10737418240x130'
+      - series: 'hetzner_cloud_volume_size_bytes{job="hetzner",instance="a",volume="db"}'
+        values: '21474836480x130'
+      - series: 'hetzner_cloud_volume_attached{job="hetzner",instance="a",volume="data"}'
+        values: '0x130'
+      - series: 'hetzner_cloud_volume_attached{job="hetzner",instance="a",volume="db"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_volume_monthly_price{job="hetzner",instance="a",volume="data",currency="EUR"}'
+        values: '0.5x130'
+      - series: 'hetzner_cloud_volume_monthly_price{job="hetzner",instance="a",volume="db",currency="EUR"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_primary_ip_info{job="hetzner",instance="a",primary_ip="p1",primary_ip_id="21",ip="1.2.3.4",primary_ip_type="ipv4",location="fsn1",server_id="10"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_primary_ip_assigned{job="hetzner",instance="a",primary_ip="p1"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_primary_ip_info{job="hetzner",instance="a",primary_ip="p2",primary_ip_id="22",ip="5.6.7.8",primary_ip_type="ipv4",location="fsn1",server_id=""}'
+        values: '1x130'
+      - series: 'hetzner_cloud_primary_ip_assigned{job="hetzner",instance="a",primary_ip="p2"}'
+        values: '0x130'
+      - series: 'hetzner_cloud_primary_ip_info{job="hetzner",instance="a",primary_ip="p3",primary_ip_id="23",ip="2001:db8::/64",primary_ip_type="ipv6",location="fsn1",server_id="10"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_primary_ip_assigned{job="hetzner",instance="a",primary_ip="p3"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_primary_ip_monthly_price{job="hetzner",instance="a",primary_ip="p1",currency="EUR"}'
+        values: '0.5x130'
+      - series: 'hetzner_cloud_primary_ip_monthly_price{job="hetzner",instance="a",primary_ip="p2",currency="EUR"}'
+        values: '0.5x130'
+      - series: 'hetzner_cloud_floating_ip_info{job="hetzner",instance="a",floating_ip="f1",floating_ip_id="31",ip="9.9.9.9",floating_ip_type="ipv4",location="fsn1",server_id=""}'
+        values: '1x130'
+      - series: 'hetzner_cloud_floating_ip_assigned{job="hetzner",instance="a",floating_ip="f1"}'
+        values: '0x130'
+      - series: 'hetzner_cloud_floating_ip_monthly_price{job="hetzner",instance="a",floating_ip="f1",currency="EUR"}'
+        values: '3x130'
+      - series: 'hetzner_cloud_image_info{job="hetzner",instance="a",image="nightly",image_id="5",image_type="snapshot",status="available",server="web-1",server_id="10"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_image_info{job="hetzner",instance="a",image="6",image_id="6",image_type="backup",status="available",server="web-1",server_id="10"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_image_created_timestamp_seconds{job="hetzner",instance="a",image="nightly",image_id="5"}'
+        values: '-8632800x130'
+      - series: 'hetzner_cloud_image_created_timestamp_seconds{job="hetzner",instance="a",image="6",image_id="6"}'
+        values: '-79200x130'
+      - series: 'hetzner_cloud_image_size_bytes{job="hetzner",instance="a",image="nightly",image_id="5"}'
+        values: '10737418240x130'
+      - series: 'hetzner_cloud_image_size_bytes{job="hetzner",instance="a",image="6",image_id="6"}'
+        values: '21474836480x130'
+      - series: 'hetzner_cloud_image_monthly_price{job="hetzner",instance="a",image="nightly",image_id="5",currency="EUR"}'
+        values: '0.25x130'
+      - series: 'hetzner_cloud_storage_box_used_bytes{job="hetzner",instance="a",storage_box="box1"}'
+        values: '500x130'
+      - series: 'hetzner_cloud_storage_box_quota_bytes{job="hetzner",instance="a",storage_box="box1"}'
+        values: '1000x130'
+      - series: 'hetzner_cloud_storage_box_monthly_price{job="hetzner",instance="a",storage_box="box1",currency="EUR"}'
+        values: '3.25x130'
+      - series: 'hetzner_cloud_certificate_not_valid_after_timestamp_seconds{job="hetzner",instance="a",certificate="shop",certificate_id="41",certificate_type="managed"}'
+        values: '2599200x130'
+      - series: 'hetzner_cloud_certificate_not_valid_after_timestamp_seconds{job="hetzner",instance="a",certificate="old",certificate_id="42",certificate_type="uploaded"}'
+        values: '180000x130'
+      - series: 'hetzner_cloud_certificate_status{job="hetzner",instance="a",certificate="shop",certificate_id="41",process="issuance",status="completed"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_certificate_status{job="hetzner",instance="a",certificate="shop",certificate_id="41",process="renewal",status="scheduled"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_exporter_build_info{job="hetzner",instance="a",version="v0.4.1",revision="abc1234",branch="master",date="2026-10-05T00:00:00Z",goversion="go1.27.1",goos="linux",goarch="amd64"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_exporter_api_requests_per_hour_estimate{job="hetzner",instance="a"}'
+        values: '900x130'
+      - series: 'hetzner_cloud_exporter_api_rate_limit_remaining{job="hetzner",instance="a"}'
+        values: '3000x130'
+      - series: 'hetzner_cloud_exporter_poll_interval_seconds{job="hetzner",instance="a"}'
+        values: '60x130'
+      - series: 'hetzner_cloud_exporter_poll_duration_seconds{job="hetzner",instance="a"}'
+        values: '1.5x130'
+      - series: 'hetzner_cloud_exporter_last_poll_success{job="hetzner",instance="a",source="servers"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_exporter_last_poll_success{job="hetzner",instance="a",source="images"}'
+        values: '0x130'
+      - series: 'hetzner_cloud_exporter_last_success_timestamp_seconds{job="hetzner",instance="a",source="servers"}'
+        values: '7140x130'
+      - series: 'hetzner_cloud_exporter_last_success_timestamp_seconds{job="hetzner",instance="a",source="images"}'
+        values: '6600x130'
+      - series: 'hetzner_cloud_exporter_source_interval_seconds{job="hetzner",instance="a",source="servers"}'
+        values: '60x130'
+      - series: 'hetzner_cloud_exporter_source_interval_seconds{job="hetzner",instance="a",source="images"}'
+        values: '600x130'
+      - series: 'hetzner_cloud_server_info{job="other",instance="x",server="web-1",server_id="99",status="running",server_type="cx52",location="hel1"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_server_cpu_usage_ratio{job="other",instance="x",server="web-1"}'
+        values: '0.9x130'
+      - series: 'hetzner_cloud_server_monthly_price{job="other",instance="x",server="web-1",currency="EUR"}'
+        values: '100x130'
+      - series: 'hetzner_cloud_load_balancer_open_connections{job="other",instance="x",load_balancer="lb-1"}'
+        values: '9999x130'
+      - series: 'hetzner_cloud_load_balancer_target_unhealthy_services{job="other",instance="x",load_balancer="lb-2",target_type="server",ip="",server="web-9",server_id="99"}'
+        values: '3x130'
+      - series: 'hetzner_cloud_exporter_build_info{job="other",instance="x",version="v9.9.9",revision="fff",branch="x",date="x",goversion="x",goos="linux",goarch="amd64"}'
+        values: '1x130'
+      - series: 'hetzner_cloud_exporter_api_requests_per_hour_estimate{job="other",instance="x"}'
+        values: '5000x130'
+      - series: 'hetzner_cloud_volume_attached{job="other",instance="x",volume="data"}'
+        values: '0x130'
+      - series: 'hetzner_cloud_volume_monthly_price{job="other",instance="x",volume="data",currency="EUR"}'
+        values: '50x130'
+      - series: 'hetzner_cloud_exporter_poll_errors_total{job="hetzner",instance="a",source="servers"}'
+        values: '0+0x130'
+      - series: 'hetzner_cloud_exporter_poll_errors_total{job="hetzner",instance="a",source="images"}'
+        values: '0+1x130'
+      - series: 'hetzner_cloud_exporter_api_responses_total{job="hetzner",instance="a",code="200"}'
+        values: '0+10x130'
+      - series: 'hetzner_cloud_exporter_api_responses_total{job="hetzner",instance="a",code="429"}'
+        values: '0+0x130'
+      - series: 'promhttp_metric_handler_errors_total{job="hetzner",instance="a",cause="gathering"}'
+        values: '0+1x130'
+      - series: 'promhttp_metric_handler_errors_total{job="other",instance="x",cause="gathering"}'
+        values: '0+100x130'
+    promql_expr_test:
+
+      # Costs: everything of job "hetzner" (servers 10, backup 1, Load Balancers 7.5, volumes 1.5, primary IPs 1, floating IP 3, snapshot 0.25, Storage Box 3.25)
+      - expr: max(costs:monthly_cost_net:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 27.5
+      - expr: max(costs:monthly_cost_over_time_net:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 27.5
+
+      # Unassigned p2 (0.5) and f1 (3), unattached "data" (0.5); not "data" of the other job
+      - expr: max(costs:unused_resources_net_month:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 4
+      - expr: max(costs:snapshots_net_month:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 0.25
+
+      # web-1 used 2 TiB of 1 TiB at 1 per TiB; web-2 is below its included traffic
+      - expr: max(costs:traffic_overage_servers_net:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: max by (kind) (costs:cost_by_kind_of_resource_net_month:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{kind="server"}'
+            value: 10
+          - labels: '{kind="server_backup"}'
+            value: 1
+          - labels: '{kind="load_balancer"}'
+            value: 7.5
+          - labels: '{kind="volume"}'
+            value: 1.5
+          - labels: '{kind="primary_ip"}'
+            value: 1
+          - labels: '{kind="floating_ip"}'
+            value: 3
+          - labels: '{kind="image"}'
+            value: 0.25
+          - labels: '{kind="storage_box"}'
+            value: 3.25
+
+      # Snapshots are named "description #id" (descriptions are not unique)
+      - expr: max by (kind, resource) (costs:most_expensive_resources:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{kind="server",resource="web-1"}'
+            value: 5
+          - labels: '{kind="server",resource="web-2"}'
+            value: 5
+          - labels: '{kind="server_backup",resource="web-1"}'
+            value: 1
+          - labels: '{kind="load_balancer",resource="lb-1"}'
+            value: 5.5
+          - labels: '{kind="load_balancer",resource="lb-2"}'
+            value: 2
+          - labels: '{kind="volume",resource="data"}'
+            value: 0.5
+          - labels: '{kind="volume",resource="db"}'
+            value: 1
+          - labels: '{kind="primary_ip",resource="p1"}'
+            value: 0.5
+          - labels: '{kind="primary_ip",resource="p2"}'
+            value: 0.5
+          - labels: '{kind="floating_ip",resource="f1"}'
+            value: 3
+          - labels: '{kind="image",resource="nightly #5"}'
+            value: 0.25
+          - labels: '{kind="storage_box",resource="box1"}'
+            value: 3.25
+      - expr: max by (resource) (costs:unused_resources_that_cost_money:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{resource="primary IP p2"}'
+            value: 0.5
+          - labels: '{resource="floating IP f1"}'
+            value: 3
+          - labels: '{resource="volume data"}'
+            value: 0.5
+
+      # Exporter health (the other job has 5000 requests/hour and version v9.9.9)
+      - expr: max(exporter:api_requests_per_hour:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 900
+      - expr: max(exporter:rate_limit_remaining:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 3000
+      - expr: max(exporter:poll_interval:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 60
+      - expr: max(exporter:poll_duration:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 1.5
+      - expr: max by (version) (exporter:version:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{version="v0.4.1"}'
+            value: 1
+
+      # Sources table: last poll, data age, interval, errors in the last hour (images fail once a minute)
+      - expr: max by (source) (exporter:sources:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{source="servers"}'
+            value: 1
+          - labels: '{source="images"}'
+            value: 0
+      - expr: max by (source) (exporter:sources:b)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{source="servers"}'
+            value: 60
+          - labels: '{source="images"}'
+            value: 600
+      - expr: max by (source) (exporter:sources:c)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{source="servers"}'
+            value: 60
+          - labels: '{source="images"}'
+            value: 600
+      - expr: max by (source) (exporter:sources:d)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{source="servers"}'
+            value: 0
+          - labels: '{source="images"}'
+            value: 60
+
+      # 10 responses a minute = 600 per hour
+      - expr: max by (code) (exporter:api_responses_by_status_per_hour:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{code="200"}'
+            value: 600
+          - labels: '{code="429"}'
+            value: 0
+      - expr: max by (cause) (exporter:metrics_errors:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{cause="gathering"}'
+            value: 15
+
+      # Inventory: servers table (the other job has a web-1 too)
+      - expr: max by (server, server_type, location, status) (inventory:servers:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server="web-1",server_type="cx22",location="fsn1",status="running"}'
+            value: 1
+          - labels: '{server="web-2",server_type="cx22",location="nbg1",status="off"}'
+            value: 1
+      - expr: max by (server) (inventory:servers:b)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server="web-1"}'
+            value: 2
+          - labels: '{server="web-2"}'
+            value: 2
+      - expr: max by (server) (inventory:servers:c)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server="web-1"}'
+            value: 4294967296
+          - labels: '{server="web-2"}'
+            value: 4294967296
+      - expr: max by (server) (inventory:servers:d)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server="web-1"}'
+            value: 5
+          - labels: '{server="web-2"}'
+            value: 5
+      - expr: max by (server) (inventory:servers:e)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server="web-1"}'
+            value: 1
+          - labels: '{server="web-2"}'
+            value: 0
+      - expr: max by (server) (inventory:servers:f)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server="web-1"}'
+            value: 1
+          - labels: '{server="web-2"}'
+            value: 0
+      - expr: max by (server) (inventory:servers:g)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server="web-1"}'
+            value: 0
+          - labels: '{server="web-2"}'
+            value: 1
+
+      # Last backup 1.5 days ago; web-2 has no backups
+      - expr: max by (server) (inventory:servers:h)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server="web-1"}'
+            value: 1.5
+
+      # Certificates: days left, issuance and renewal status (only managed certificates have one)
+      - expr: max by (certificate, certificate_type) (inventory:certificates:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{certificate="shop",certificate_type="managed"}'
+            value: 30
+          - labels: '{certificate="old",certificate_type="uploaded"}'
+            value: 2
+      - expr: max by (certificate, issuance) (inventory:certificates:b)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{certificate="shop",issuance="completed"}'
+            value: 1
+      - expr: max by (certificate, renewal) (inventory:certificates:c)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{certificate="shop",renewal="scheduled"}'
+            value: 1
+      - expr: max by (storage_box) (inventory:storage_boxes:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{storage_box="box1"}'
+            value: 500
+      - expr: max by (storage_box) (inventory:storage_boxes:b)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{storage_box="box1"}'
+            value: 1000
+      - expr: max by (storage_box) (inventory:storage_boxes:c)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{storage_box="box1"}'
+            value: 50
+
+      # Volumes with the name of their server; an unattached volume once, without a server
+      - expr: max by (volume, server) (inventory:volumes:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{volume="db",server="web-1"}'
+            value: 1
+          - labels: '{volume="data"}'
+            value: 1
+      - expr: max by (volume) (inventory:volumes:b)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{volume="data"}'
+            value: 10737418240
+          - labels: '{volume="db"}'
+            value: 21474836480
+      - expr: max by (volume) (inventory:volumes:c)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{volume="data"}'
+            value: 0
+          - labels: '{volume="db"}'
+            value: 1
+      - expr: max by (volume) (inventory:volumes:d)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{volume="data"}'
+            value: 0.5
+          - labels: '{volume="db"}'
+            value: 1
+
+      # IP addresses with the server they are assigned to; the value is "assigned"
+      - expr: max by (kind, name, ip, type, server) (inventory:ip_addresses:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{kind="primary",name="p1",ip="1.2.3.4",type="ipv4",server="web-1"}'
+            value: 1
+          - labels: '{kind="primary",name="p2",ip="5.6.7.8",type="ipv4"}'
+            value: 0
+          - labels: '{kind="primary",name="p3",ip="2001:db8::/64",type="ipv6",server="web-1"}'
+            value: 1
+          - labels: '{kind="floating",name="f1",ip="9.9.9.9",type="ipv4"}'
+            value: 0
+
+      # Snapshots and backups: age in days, size, price (backups have none)
+      - expr: max by (image_id, image, image_type, server) (inventory:snapshots_and_backups:a)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{image_id="5",image="nightly",image_type="snapshot",server="web-1"}'
+            value: 1
+          - labels: '{image_id="6",image="6",image_type="backup",server="web-1"}'
+            value: 1
+      - expr: max by (image_id) (inventory:snapshots_and_backups:b)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{image_id="5"}'
+            value: 100
+          - labels: '{image_id="6"}'
+            value: 1
+      - expr: max by (image_id) (inventory:snapshots_and_backups:c)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{image_id="5"}'
+            value: 10737418240
+          - labels: '{image_id="6"}'
+            value: 21474836480
+      - expr: max by (image_id) (inventory:snapshots_and_backups:d)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{image_id="5"}'
+            value: 0.25
+
+      # Load Balancer gauges in % of the type limits (lb-1); the other job has 9999 connections on its lb-1
+      - expr: max(loadbalancer:connections:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 40
+      - expr: max(loadbalancer:targets:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 40
+      - expr: max(loadbalancer:services:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 20
+      - expr: max(loadbalancer:certificates:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 10
+      - expr: max(loadbalancer:traffic:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 50
+
+      # No data for lb-2: "No data", not 0%
+      - expr: max(loadbalancer:connections:a:lb_2)
+        eval_time: 2h
+        exp_samples: []
+
+      # web-2 is unhealthy on lb-1
+      - expr: max(loadbalancer:unhealthy_targets:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+      # lb-2 reports targets, all healthy: 0 (not "No data"); the other job's unhealthy target on its lb-2 doesn't count
+      - expr: max(loadbalancer:unhealthy_targets:a:lb_2)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 0
+      - expr: max by (load_balancer_type) (loadbalancer:type:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{load_balancer_type="lb11"}'
+            value: 1
+      - expr: max(loadbalancer:requests_per_second:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 12
+
+      # Bandwidth in bit/s
+      - expr: max(loadbalancer:bandwidth:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 8000
+      - expr: max(loadbalancer:bandwidth:b:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 16000
+      - expr: max(loadbalancer:connections_per_second:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 3
+      - expr: max(loadbalancer:open_connections:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 4000
+      - expr: max(loadbalancer:open_connections:b:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 10000
+
+      # Target health: 2 healthy, 1 unknown, 0 unhealthy
+      - expr: max by (server, listen_port) (loadbalancer:target_health:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server="web-1",listen_port="443"}'
+            value: 2
+          - labels: '{server="web-2",listen_port="443"}'
+            value: 0
+      - expr: max by (server, listen_port) (loadbalancer:target_health:a:lb_2)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server="web-1",listen_port="80"}'
+            value: 2
+
+      # Targets not healthy, with the reason; one "all healthy" row when every target is healthy
+      - expr: max by (server, listen_port, status, detail) (loadbalancer:targets_not_healthy_with_reason:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server="web-2",listen_port="443",status="unhealthy",detail="layer4_no_connection"}'
+            value: 1
+      - expr: max by (status) (loadbalancer:targets_not_healthy_with_reason:a:lb_2)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{status="✓ All targets are healthy"}'
+            value: 1
+      - expr: max(loadbalancer:connection_usage_of_the_type_s_limit:a:lb_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 40
+
+      # Server web-1: CPU 25 % of all vCPUs (the other job's web-1 has 90 %), price incl. backups 5 + 1
+      - expr: max(servers:cpu:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 25
+      - expr: max(servers:cpu_usage:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 25
+      - expr: max(servers:traffic:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 200
+      - expr: max(servers:status:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: max(servers:vcpus:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 2
+      - expr: max(servers:memory:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 4294967296
+      - expr: max(servers:disk:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 42949672960
+      - expr: max(servers:monthly_price_net:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 6
+      - expr: max(servers:backups:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: max(servers:delete_protection:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: max(servers:disk_throughput:b:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 200
+      - expr: max(servers:disk_iops:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 15
+      - expr: max(servers:disk_iops:b:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 3
+      - expr: max(servers:public_network_traffic:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 100
+      - expr: max(servers:public_network_traffic:b:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 300
+      - expr: max(servers:public_network_packets:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 7
+      - expr: max(servers:public_network_packets:b:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 9
+      - expr: max(servers:traffic_this_billing_period:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 2199023255552
+      - expr: max(servers:traffic_this_billing_period:b:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 1099511627776
+
+      # Disks 0 and 1 add up; disk 0 reported by two exporter instances counts once
+      - expr: max(servers:disk_throughput:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 1500
+      - expr: max by (server_type, location) (servers:type:a:web_1)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server_type="cx22",location="fsn1"}'
+            value: 1
+
+      # Server web-2 is off: no CPU data; price without backups is 5 (the "or vector(0)")
+      - expr: max(servers:cpu:a:web_2)
+        eval_time: 2h
+        exp_samples: []
+      - expr: max(servers:monthly_price_net:a:web_2)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 5
+      - expr: max(servers:status:a:web_2)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{}'
+            value: 0
+      - expr: max by (server_type, location) (servers:type:a:web_2)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{server_type="cx22",location="nbg1"}'
+            value: 1

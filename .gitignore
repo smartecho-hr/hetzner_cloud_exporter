@@ -1,0 +1,90 @@
+# Binaries & Executables
+*.exe
+*.out
+*.app
+*.dll
+*.dylib
+*.so
+
+# Go build artifacts
+*.a
+*.o
+*.lo
+*.la
+*.swp
+*.swo
+*.test
+*.tmp
+*.prof
+
+# Go Modules (caches dependencies)
+vendor/
+
+# Go Workspaces
+go.work
+go.work.sum
+
+# Dependencies (should not be committed)
+go.mod~
+
+# IDE & Editor Files
+.vscode/
+.idea/
+*.iml
+*.sublime-workspace
+*.swp
+*.swo
+*.DS_Store
+
+# Logs & Debug Files
+*.log
+*.trace
+*.prof
+*.cov
+*.test
+debug/
+trace.out
+cpu.prof
+mem.prof
+
+# Environment Files
+docker/.env
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+
+# Temporary Files & Cache
+*.bak
+*.swp
+*.swo
+*~
+*.tmp
+*.log
+node_modules/
+dist/
+bin/
+build/
+coverage/
+.coverage
+.coverage.*
+
+# Docker & CI/CD Files (if applicable)
+docker-compose.override.yml
+docker-compose.dev.yml
+docker-compose.prod.yml
+docker.env
+/.docker/
+.Dockerfile.swp
+
+# Kubernetes / Terraform
+*.kubeconfig
+*.tfstate
+
+# Configs and secrets (contain the API token)
+config.yaml
+*.env
+secrets/
+docker/hcloud_token
+web.yml

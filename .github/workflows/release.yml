@@ -1,0 +1,119 @@
+name: Release
+
+# Pushing a version tag (git tag -a v1.2.3 && git push origin v1.2.3) runs the
+# checks, then publishes the multi-arch image to ghcr.io and a GitHub Release
+# with the binaries. Pre-release tags (v1.2.3-rc1) don't move :latest.
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {} # each job asks for what it needs
+
+env:
+  IMAGE: ghcr.io/smartecho-hr/hetzner-cloud-exporter
+  PKG: github.com/smartecho-hr/hetzner_cloud_exporter/internal/buildinfo
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./... -race
+      - name: promtool test
+        run: |
+          docker run --rm -v "$PWD/prometheus:/rules:ro" -w /rules --entrypoint promtool \
+            prom/prometheus:v3.15.0 test rules alerts_test.yml
+          docker run --rm -v "$PWD/grafana-dashboards/test:/rules:ro" -w /rules --entrypoint promtool \
+            prom/prometheus:v3.15.0 test rules dashboards_test.yml
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push (amd64 + arm64)
+        run: |
+          tags="-t ${IMAGE}:${GITHUB_REF_NAME}"
+          case "${GITHUB_REF_NAME}" in
+            *-*) ;; # pre-release: no :latest
+            *) tags="$tags -t ${IMAGE}:latest" ;;
+          esac
+          docker buildx build --platform linux/amd64,linux/arm64 -f docker/Dockerfile \
+            --build-arg VERSION=${GITHUB_REF_NAME} \
+            --build-arg COMMIT=$(git rev-parse --short HEAD) \
+            --build-arg BRANCH=master \
+            --build-arg SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) \
+            --label org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY} \
+            --label org.opencontainers.image.version=${GITHUB_REF_NAME} \
+            --label org.opencontainers.image.licenses=Apache-2.0 \
+            $tags --push .
+
+  binaries:
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+      - name: Build release archives
+        run: |
+          set -euo pipefail
+          version=${GITHUB_REF_NAME}
+          commit=$(git rev-parse --short HEAD)
+          date=$(date -u -d @$(git log -1 --format=%ct) +%Y-%m-%dT%H:%M:%SZ)
+          mkdir -p dist
+          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os=${platform%/*}; arch=${platform#*/}; ext=""
+            [ "$os" = windows ] && ext=.exe
+            name=hetzner_cloud_exporter-${version}.${os}-${arch}
+            mkdir -p dist/$name
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false -ldflags "-s -w \
+              -X '${PKG}.Version=${version}' -X '${PKG}.Commit=${commit}' -X '${PKG}.Branch=master' \
+              -X '${PKG}.Date=${date}' -X '${PKG}.BuildUser=github-actions' \
+              -X '${PKG}.GoVersion=$(go env GOVERSION)' -X '${PKG}.Platform=${os}/${arch}'" \
+              -o dist/$name/hetzner_cloud_exporter$ext .
+            mkdir -p dist/$name/grafana-dashboards
+            cp grafana-dashboards/*.json dist/$name/grafana-dashboards/
+            cp -r LICENSE NOTICE README.md CHANGELOG.md config.example.yaml prometheus dist/$name/
+            if [ "$os" = windows ]; then
+              (cd dist && zip -qr $name.zip $name)
+            else
+              tar -C dist --owner=0 --group=0 -czf dist/$name.tar.gz $name
+            fi
+            rm -rf dist/$name
+          done
+          (cd dist && sha256sum *.tar.gz *.zip > sha256sums.txt)
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          prerelease=""
+          case "${GITHUB_REF_NAME}" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.zip dist/sha256sums.txt \
+            --repo "${GITHUB_REPOSITORY}" $prerelease \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md). Image: \`${IMAGE}:${GITHUB_REF_NAME}\` (amd64, arm64). Archives include the Grafana dashboards and Prometheus alerts."

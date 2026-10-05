@@ -1,0 +1,57 @@
+# hetzner_cloud_exporter configuration
+#
+# Copy to config.yaml (read from the working directory by default, or pass
+# --config.file). Every option is optional except the API token.
+# Precedence: command line flag > environment variable > this file > default.
+
+# Host and port where metrics are served
+server:
+  host: "0.0.0.0"
+  port: 9210
+  metrics_path: "/metrics"
+  # TLS and/or basic auth: Prometheus web config file (see README.md)
+  # web_config_file: "web.yml"
+
+# Hetzner Cloud API
+api:
+  # Read-only API token is sufficient
+  token: "<your_token_goes_here>"
+  # Or read the token from a file (e.g. a Docker/Kubernetes secret) instead;
+  # set only one of token and token_file
+  # token_file: "/run/secrets/hcloud_token"
+  # How often the Hetzner API is polled (minimum 10s). The API allows
+  # 3600 requests/hour per project, see README.md.
+  poll_interval: 60s
+  # Server and Load Balancer metrics (CPU, disk, network, connections; one
+  # request per resource). 0 turns them off, otherwise at least 10s; e.g. 2m
+  # halves their API usage.
+  metrics_interval: 60s
+  # Maximum parallel API requests
+  concurrency: 5
+
+log:
+  # debug, info, warn, error
+  level: info
+
+# Turn collectors off you don't need; a disabled collector makes no API
+# requests. All are enabled by default.
+collectors:
+  pricing: true
+  servers: true
+  load_balancers: true
+  certificates: true
+  volumes: true
+  floating_ips: true
+  primary_ips: true
+  images: true
+  storage_boxes: true
+  ssh_keys: true
+
+# How often each collector is fetched from the API (0 = every poll, see
+# api.poll_interval). Defaults: pricing 1h, images 10m, storage_boxes 5m,
+# ssh_keys 1h, all others every poll.
+collector_intervals:
+  pricing: 1h
+  images: 10m
+  storage_boxes: 5m
+  ssh_keys: 1h

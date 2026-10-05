@@ -1,0 +1,26 @@
+# golangci-lint v2 configuration: golangci-lint run ./...
+# (golangci-lint must be built with Go >= the version in go.mod, otherwise it refuses this module).
+version: "2"
+
+formatters:
+  enable:
+    - gofmt # lint fails on unformatted code
+
+linters:
+  enable:
+    - bodyclose     # HTTP response bodies are closed
+    - errorlint     # errors.Is/As instead of == and type switches on wrapped errors
+    - gocritic      # common mistakes, e.g. os.Exit/log.Fatal skipping defers
+    - misspell
+    - nilerr        # returning nil although err != nil
+    - unconvert
+    - usestdlibvars # http.MethodGet etc.
+  settings:
+    errcheck:
+      exclude-functions:
+        # Writing usage/version text to stdout/stderr: nothing sensible to do on error.
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    presets:
+      - std-error-handling # e.g. unchecked Close in defer

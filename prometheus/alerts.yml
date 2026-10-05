@@ -1,0 +1,416 @@
+# Prometheus alert rules for hetzner_cloud_exporter.
+# Load with:  rule_files: ["alerts.yml"]
+# Unit tests: alerts_test.yml (promtool test rules alerts_test.yml)
+#
+# Expressions aggregate by `job` and the resource labels: the exporter's
+# `instance` changes when it moves (dynamic ports), and grouping by `job`
+# keeps several exporters (e.g. one per Hetzner project) apart. Tune
+# thresholds and "for" durations to your setup.
+
+groups:
+  - name: hetzner-exporter
+    rules:
+      - alert: HetznerCloudExporterDown
+        # absent(): no exporter at all; second part: a job that had an
+        # exporter in the last 24 hours but has none now. After 24 hours the
+        # second part resolves (that's how a removed exporter stops alerting),
+        # so don't leave this alert unhandled for a day.
+        expr: |
+          absent(hetzner_cloud_exporter_build_info)
+            or (count by (job) (max_over_time(hetzner_cloud_exporter_build_info[24h]))
+                unless on (job) count by (job) (hetzner_cloud_exporter_build_info))
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Hetzner exporter {{ with $labels.job }}{{ . }} {{ end }}is not being scraped"
+          description: "No metrics from hetzner_cloud_exporter{{ with $labels.job }} (job {{ . }}){{ end }} for 5 minutes. The alert resolves by itself 24 hours after a job's last metrics, unless no exporter is left at all."
+
+      - alert: HetznerCloudExporterPollFailing
+        # Second part: failures that alternate with successes, e.g. per-item
+        # metrics failing while the list succeeds.
+        expr: |
+          max by (job, source) (hetzner_cloud_exporter_last_poll_success) == 0
+            or sum by (job, source) (increase(hetzner_cloud_exporter_poll_errors_total[1h])) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hetzner API polling fails for {{ $labels.source }}"
+          description: "Polls of {{ $labels.source }} keep failing. Check the exporter log (e.g. 401 = wrong token)."
+
+      - alert: HetznerCloudExporterDataStale
+        # Relative to how often the source is fetched (prices and SSH keys
+        # only hourly), at least 15 minutes, and at least 3 poll intervals:
+        # after HTTP 429 the exporter polls less often (up to 16x) on purpose.
+        expr: |
+          (
+            time() - max by (job, source) (hetzner_cloud_exporter_last_success_timestamp_seconds)
+              > max by (job, source) (clamp_min(3 * hetzner_cloud_exporter_source_interval_seconds, 900))
+          )
+            and
+          (
+            time() - max by (job, source) (hetzner_cloud_exporter_last_success_timestamp_seconds)
+              > on (job) group_left max by (job) (3 * hetzner_cloud_exporter_poll_interval_seconds)
+          )
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hetzner data for {{ $labels.source }} is stale"
+          description: "The {{ $labels.source }} list hasn't been fetched for {{ $value | humanizeDuration }}; dashboards show old data. (A source that never succeeded since start is covered by HetznerCloudExporterPollFailing.)"
+
+      - alert: HetznerCloudExporterMetricErrors
+        expr: sum by (job) (increase(promhttp_metric_handler_errors_total[15m])) > 0
+          and on (job) count by (job) (hetzner_cloud_exporter_build_info)
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hetzner exporter {{ $labels.job }} reports errors while serving metrics"
+          description: "Some metrics were dropped from /metrics (e.g. duplicate series). Check the exporter log."
+
+      - alert: HetznerCloudAPIRateLimitLow
+        expr: min by (job) (hetzner_cloud_exporter_api_rate_limit_remaining) < 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Hetzner API rate limit almost used up
+          description: "Only {{ $value | humanize }} API requests left in the current window. Other tools in the project share this limit."
+
+      - alert: HetznerCloudAPIRateLimited
+        expr: sum by (job) (increase(hetzner_cloud_exporter_api_responses_total{code="429"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Hetzner API rate limit reached
+          description: "The API answered with HTTP 429 ({{ $value | humanize }} times in the last 15 minutes). The exporter polls less often until it recovers (hetzner_cloud_exporter_poll_interval_seconds); check other tools using the same project."
+
+      - alert: HetznerCloudAPIUsageTooHigh
+        expr: max by (job) (hetzner_cloud_exporter_api_requests_per_hour_estimate) > 3000
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Hetzner exporter uses most of the API rate limit
+          description: "The exporter needs about {{ $value | humanize }} requests/hour of 3600. Increase --hcloud.metrics-interval (or set it to 0), increase --hcloud.poll-interval, or turn off collectors."
+
+  - name: hetzner-servers
+    rules:
+      - alert: HetznerCloudServerOff
+        # Servers switched off on purpose: silence them in Alertmanager.
+        expr: max by (job, server) (hetzner_cloud_server_info{status="off"}) == 1
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Server {{ $labels.server }} is off"
+          description: "Hetzner reports server {{ $labels.server }} as off. Silence this alert if it is off on purpose."
+
+      - alert: HetznerCloudServerStuck
+        expr: max by (job, server, status) (hetzner_cloud_server_info{status!~"running|off"}) == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Server {{ $labels.server }} is {{ $labels.status }} for 15 minutes"
+          description: "The server is stuck in a transition (starting, stopping, migrating, rebuilding, ...)."
+
+      - alert: HetznerCloudServerLocked
+        expr: max by (job, server) (hetzner_cloud_server_locked) == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Server {{ $labels.server }} is locked for 30 minutes"
+          description: "Hetzner locks a server during actions; a long lock can mean a stuck action."
+
+      - alert: HetznerCloudServerCPUHigh
+        # With a metrics interval of 30m or more, one sample can satisfy "for":
+        # keep "for" longer than --hcloud.metrics-interval.
+        expr: |
+          max by (job, server) (hetzner_cloud_server_cpu_usage_ratio) > 0.9
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Server {{ $labels.server }} CPU at {{ $value | humanizePercentage }} for 30 minutes"
+          description: "CPU usage across all vCPUs (100% = all vCPUs busy). Consider a larger server type."
+
+      - alert: HetznerCloudServerBackupMissing
+        # Only servers older than 2 days with backups enabled for 2 days (the
+        # first backup can take a day), and only when the images collector,
+        # which provides last_backup_timestamp_seconds, has data.
+        expr: |
+          (
+            max by (job, server) (min_over_time(hetzner_cloud_server_backup_enabled[2d])) == 1
+              and on (job, server)
+            time() - max by (job, server) (hetzner_cloud_server_created_timestamp_seconds) > 2 * 86400
+              and on (job)
+            count by (job) (hetzner_cloud_exporter_last_success_timestamp_seconds{source="images"})
+          )
+            unless on (job, server)
+          time() - max by (job, server) (hetzner_cloud_server_last_backup_timestamp_seconds) < 2 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Server {{ $labels.server }} has backups enabled but no backup in the last 2 days"
+          description: "Hetzner creates backups daily. Check the server's backup window and the Hetzner Console."
+
+      - alert: HetznerCloudServerTypeDeprecated
+        expr: max by (job, server) (hetzner_cloud_server_type_deprecated) == 1
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Server type of {{ $labels.server }} is deprecated in its location"
+          description: "See hetzner_cloud_server_type_unavailable_after_timestamp_seconds for the date after which it can no longer be ordered; plan a migration."
+
+      - alert: HetznerCloudServerTrafficHigh
+        expr: |
+          max by (job, server) (hetzner_cloud_server_outgoing_traffic_bytes)
+            / max by (job, server) (hetzner_cloud_server_included_traffic_bytes > 0) > 0.8
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Server {{ $labels.server }} used {{ $value | humanizePercentage }} of included traffic"
+          description: Traffic over the included amount is billed.
+
+  - name: hetzner-load-balancers
+    rules:
+      - alert: HetznerCloudLoadBalancerTargetUnhealthy
+        # The reason (detail, http_status_code) is looked up in the
+        # annotation, so a changing reason doesn't restart the "for" timer.
+        expr: |
+          max by (job, load_balancer, target_type, server, server_id, ip, listen_port) (
+            hetzner_cloud_load_balancer_target_health_status{status="unhealthy"}
+          )
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Target {{ if $labels.server }}{{ $labels.server }}{{ else if $labels.ip }}{{ $labels.ip }}{{ else }}server ID {{ $labels.server_id }}{{ end }} of {{ $labels.load_balancer }} is unhealthy on port {{ $labels.listen_port }}"
+          description: 'Reason: {{ with printf "max by (detail, http_status_code) (hetzner_cloud_load_balancer_target_health_status{status=\"unhealthy\",job=\"%s\",load_balancer=\"%s\",server_id=\"%s\",ip=\"%s\",listen_port=\"%s\"})" $labels.job $labels.load_balancer $labels.server_id $labels.ip $labels.listen_port | query }}{{ range . }}{{ .Labels.detail }} {{ .Labels.http_status_code }}{{ end }}{{ end }} (layer4_* = network/firewall/host, layer7_*/unexpected_http_* = application).'
+
+      - alert: HetznerCloudLoadBalancerServiceNoHealthyTargets
+        # At least one target must be unhealthy: targets that are only
+        # "unknown" (just added) don't page.
+        expr: |
+          max by (job, load_balancer, listen_port) (hetzner_cloud_load_balancer_target_healthy) == 0
+            and on (job, load_balancer, listen_port)
+          count by (job, load_balancer, listen_port) (hetzner_cloud_load_balancer_target_health_status{status="unhealthy"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Load Balancer {{ $labels.load_balancer }} has no healthy target on port {{ $labels.listen_port }}"
+          description: "No target of {{ $labels.load_balancer }} passes the health check for the service on port {{ $labels.listen_port }}; that service is not being served."
+
+      - alert: HetznerCloudLoadBalancerWithoutTargets
+        expr: |
+          max by (job, load_balancer) (hetzner_cloud_load_balancer_targets) == 0
+            and max by (job, load_balancer) (hetzner_cloud_load_balancer_services) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Load Balancer {{ $labels.load_balancer }} has services but no targets"
+          description: "E.g. a label selector that matches no servers. Traffic to {{ $labels.load_balancer }} is not being served."
+
+      - alert: HetznerCloudLoadBalancerConnectionsNearLimit
+        expr: |
+          max by (job, load_balancer) (hetzner_cloud_load_balancer_open_connections)
+            / max by (job, load_balancer) (hetzner_cloud_load_balancer_max_connections > 0) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Load Balancer {{ $labels.load_balancer }} uses {{ $value | humanizePercentage }} of its connection limit"
+          description: "Open connections are close to the maximum of the Load Balancer type. New connections may be refused; consider a larger type."
+
+      - alert: HetznerCloudLoadBalancerCapacityNearLimit
+        # >= 0.8: on small types 0.9 would only fire at 100 % (e.g. 5 of 5 targets).
+        expr: |
+          max by (job, load_balancer) (hetzner_cloud_load_balancer_targets) / max by (job, load_balancer) (hetzner_cloud_load_balancer_max_targets > 0) >= 0.8
+            or max by (job, load_balancer) (hetzner_cloud_load_balancer_services) / max by (job, load_balancer) (hetzner_cloud_load_balancer_max_services > 0) >= 0.8
+            or max by (job, load_balancer) (hetzner_cloud_load_balancer_certificates) / max by (job, load_balancer) (hetzner_cloud_load_balancer_max_certificates > 0) >= 0.8
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Load Balancer {{ $labels.load_balancer }} is close to its target, service or certificate limit"
+          description: "Adding more targets, services or certificates may fail; consider a larger Load Balancer type."
+
+      - alert: HetznerCloudLoadBalancerTrafficHigh
+        expr: |
+          max by (job, load_balancer) (hetzner_cloud_load_balancer_outgoing_traffic_bytes)
+            / max by (job, load_balancer) (hetzner_cloud_load_balancer_included_traffic_bytes > 0) > 0.8
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Load Balancer {{ $labels.load_balancer }} used {{ $value | humanizePercentage }} of included traffic"
+          description: Traffic over the included amount is billed.
+
+      - alert: HetznerCloudLoadBalancerTypeDeprecated
+        expr: max by (job, load_balancer) (hetzner_cloud_load_balancer_type_deprecated) == 1
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Load Balancer type of {{ $labels.load_balancer }} is deprecated"
+          description: "See hetzner_cloud_load_balancer_type_unavailable_after_timestamp_seconds; plan a migration to a current type."
+
+  - name: hetzner-certificates
+    rules:
+      - alert: HetznerCloudCertificateFailed
+        expr: max by (job, certificate, process) (hetzner_cloud_certificate_status{status="failed"}) == 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Managed certificate {{ $labels.certificate }}: {{ $labels.process }} failed"
+          description: "Hetzner could not issue or renew the certificate (often DNS not pointing to Hetzner). A failed issuance has no expiry date, so the expiry alerts can't catch it."
+
+      - alert: HetznerCloudCertificateRenewalUnavailable
+        expr: max by (job, certificate) (hetzner_cloud_certificate_status{process="renewal", status="unavailable"}) == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Managed certificate {{ $labels.certificate }} can't be renewed"
+          description: "Hetzner reports renewal as unavailable; the certificate will expire unless this is resolved."
+
+      - alert: HetznerCloudCertificateExpiringSoon
+        expr: (min by (job, certificate) (hetzner_cloud_certificate_not_valid_after_timestamp_seconds) - time()) / 86400 < 14 >= 3
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Certificate {{ $labels.certificate }} expires in {{ $value | humanize }} days"
+          description: Managed certificates renew automatically; if this fires for one, renewal is failing.
+
+      - alert: HetznerCloudCertificateExpiringCritical
+        expr: (min by (job, certificate) (hetzner_cloud_certificate_not_valid_after_timestamp_seconds) - time()) / 86400 < 3 >= 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Certificate {{ $labels.certificate }} expires in {{ $value | humanize }} days"
+          description: "Less than 3 days left. Managed certificates renew automatically, so renewal is failing; replace uploaded certificates now."
+
+      - alert: HetznerCloudCertificateExpired
+        expr: min by (job, certificate) (hetzner_cloud_certificate_not_valid_after_timestamp_seconds) - time() < 0
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Certificate {{ $labels.certificate }} has expired"
+          description: "Replace it, or delete it if no Load Balancer uses it anymore."
+
+  - name: hetzner-ips
+    rules:
+      - alert: HetznerCloudIPBlocked
+        expr: |
+          max by (job, floating_ip) (hetzner_cloud_floating_ip_blocked) == 1
+            or max by (job, primary_ip) (hetzner_cloud_primary_ip_blocked) == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "IP {{ $labels.floating_ip }}{{ $labels.primary_ip }} is blocked by Hetzner"
+          description: "Hetzner blocks IPs e.g. after abuse reports. Check your e-mail and the Hetzner Console."
+
+  - name: hetzner-costs
+    rules:
+      - alert: HetznerCloudUnassignedPrimaryIP
+        # IPv4 costs money, IPv6 is free; works without the pricing collector.
+        expr: |
+          max by (job, primary_ip) (hetzner_cloud_primary_ip_assigned) == 0
+            and on (job, primary_ip) (
+              max by (job, primary_ip) (hetzner_cloud_primary_ip_monthly_price) > 0
+                or max by (job, primary_ip) (hetzner_cloud_primary_ip_info{primary_ip_type="ipv4"})
+            )
+        for: 24h
+        labels:
+          severity: info
+        annotations:
+          summary: "Primary IP {{ $labels.primary_ip }} is not assigned but costs money"
+          description: "Unassigned for more than a day. Delete it if it isn't kept on purpose."
+
+      - alert: HetznerCloudUnassignedFloatingIP
+        expr: max by (job, floating_ip) (hetzner_cloud_floating_ip_assigned) == 0
+        for: 24h
+        labels:
+          severity: info
+        annotations:
+          summary: "Floating IP {{ $labels.floating_ip }} is not assigned but costs money"
+          description: "Unassigned for more than a day. Delete it if it isn't kept on purpose."
+
+      - alert: HetznerCloudUnattachedVolume
+        expr: max by (job, volume) (hetzner_cloud_volume_attached) == 0
+        for: 24h
+        labels:
+          severity: info
+        annotations:
+          summary: "Volume {{ $labels.volume }} is not attached but costs money"
+          description: "Not attached to a server for more than a day."
+
+      - alert: HetznerCloudOldSnapshot
+        # Delete-protected snapshots are kept on purpose and left out.
+        expr: |
+          (time() - max by (job, image, image_id) (hetzner_cloud_image_created_timestamp_seconds)) / 86400 > 90
+            and on (job, image_id) max by (job, image_id) (hetzner_cloud_image_info{image_type="snapshot"})
+            unless on (job, image_id) max by (job, image_id) (hetzner_cloud_image_delete_protection) == 1
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Snapshot {{ $labels.image }} ({{ $labels.image_id }}) is {{ $value | humanize }} days old"
+          description: "Snapshots are billed per GB and month. Delete it if it isn't needed anymore, or enable delete protection to keep it without this alert."
+
+      - alert: HetznerCloudStorageBoxAlmostFull
+        expr: |
+          max by (job, storage_box) (hetzner_cloud_storage_box_used_bytes)
+            / max by (job, storage_box) (hetzner_cloud_storage_box_quota_bytes > 0) > 0.9
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage Box {{ $labels.storage_box }} is {{ $value | humanizePercentage }} full"
+          description: "Backups writing to it may fail soon. Delete old data or snapshots, or use a larger type."
+
+      - alert: HetznerCloudServerTrafficOverage
+        # Hetzner's "TB" is 2^40 bytes.
+        expr: |
+          sum by (job, server) (
+            clamp_min(max by (job, server) (hetzner_cloud_server_outgoing_traffic_bytes) - max by (job, server) (hetzner_cloud_server_included_traffic_bytes > 0), 0)
+              / 1099511627776
+              * on (job, server) max by (job, server) (hetzner_cloud_server_traffic_price_per_tb)
+          ) > 1
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Server {{ $labels.server }} traffic over the included amount costs about {{ $value | humanize }} this billing period"
+          description: Net, without VAT, in the account's currency.
+
+      - record: job:hetzner_cloud_monthly_cost:sum
+        # Total net monthly cost per exporter (job), in the account's currency.
+        expr: |
+          sum by (job) (
+            max by (job, __name__, server, load_balancer, volume, floating_ip, primary_ip, image_id, storage_box) ({__name__=~"hetzner_cloud_.+_monthly_price"})
+          )
+
+      - alert: HetznerCloudMonthlyCostIncreased
+        # Compared with last week's median, so a gap in old data (pricing
+        # outage, a collector enabled later) doesn't count as an increase.
+        expr: job:hetzner_cloud_monthly_cost:sum > 1.2 * quantile_over_time(0.5, job:hetzner_cloud_monthly_cost:sum[7d] offset 1d)
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Hetzner monthly cost rose to {{ $value | humanize }} (more than 20% above last week)"
+          description: "Net, without VAT, in the account's currency. Check new or resized servers, Load Balancers, volumes and snapshots."
