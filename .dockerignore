@@ -1,0 +1,8 @@
+# Allowlist: only what the Go build needs goes into the Docker build context.
+# Keeps config.yaml (API token), docker/.env, local files, .git and bin/ out of
+# every image layer and build cache.
+*
+!go.mod
+!go.sum
+!main.go
+!internal/

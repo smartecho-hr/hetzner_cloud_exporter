@@ -1,0 +1,48 @@
+# Project name, so the network is "hetzner_cloud_exporter_monitoring".
+name: hetzner_cloud_exporter
+
+services:
+  hetzner_cloud_exporter:
+    container_name: hetzner_cloud_exporter
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      # Version information for /version, e.g.
+      # VERSION=$(git describe --tags --always) COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+        BRANCH: ${BRANCH:-unknown}
+    image: hetzner-cloud-exporter:local
+    pull_policy: build # build this checkout instead of pulling an image
+    restart: unless-stopped
+    ports:
+      # Without --web.config.file the metrics have no authentication, and
+      # Docker's port publishing bypasses host firewalls: published on localhost
+      # only. Drop "ports" and scrape over the "monitoring" network, or publish
+      # on all interfaces ("9210:9210") only with TLS and basic auth.
+      - "127.0.0.1:9210:9210"
+    env_file: # Load environment variables from .env (see .env.example)
+      - .env
+    # Hardening: the exporter writes nothing and needs no capabilities.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - monitoring
+    # Token as a Docker secret instead of an environment variable: create
+    # docker/hcloud_token (git-ignored, readable by UID 65532), uncomment these
+    # lines and the "secrets" section below, and remove HCLOUD_API_TOKEN from .env.
+    # secrets:
+    #   - hcloud_token
+    # environment:
+    #   HCLOUD_API_TOKEN_FILE: /run/secrets/hcloud_token
+
+# secrets:
+#   hcloud_token:
+#     file: ./hcloud_token
+
+networks:
+  monitoring:
+    driver: bridge
