@@ -1,8 +1,45 @@
 # Hetzner Cloud Prometheus Exporter
 
+**Monitoring, costs and Grafana dashboards for your Hetzner Cloud project.**
+
+[![CI](https://github.com/smartecho-hr/hetzner_cloud_exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/smartecho-hr/hetzner_cloud_exporter/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/smartecho-hr/hetzner_cloud_exporter)](https://github.com/smartecho-hr/hetzner_cloud_exporter/releases/latest)
+[![Go](https://img.shields.io/github/go-mod/go-version/smartecho-hr/hetzner_cloud_exporter)](go.mod)
+[![License](https://img.shields.io/github/license/smartecho-hr/hetzner_cloud_exporter)](LICENSE)
+
 Prometheus exporter for **Hetzner Cloud**: servers, Load Balancers, certificates, volumes, IPs,
 snapshots, Storage Boxes, SSH keys and their costs. It polls the Hetzner Cloud API in the
 background and stays within the API rate limit, however often Prometheus scrapes.
+
+![Load Balancer dashboard: limits, traffic, requests and target health with the reason a target is unhealthy](.github/images/loadbalancer.png)
+
+<sub>Screenshots show an invented demo project.</sub>
+
+## Why this exporter?
+
+Prometheus can already find Hetzner servers to scrape (`hetzner_sd_configs`), and node_exporter
+measures what happens inside a server. Neither shows the Hetzner Cloud project itself: Load
+Balancer target health and why a target is unhealthy, certificate expiry, the age of the newest
+backup, traffic used vs. included, what every resource costs per month and which ones cost money
+without being used. This exporter turns that into Prometheus metrics, with ready-made dashboards
+and alerts.
+
+It reads the Hetzner API on its own schedule, not on every scrape:
+
+```
+Hetzner API ──(background polls, default every 60s)──▶ exporter       keeps the latest values
+                                                          ▲
+                                                          │ scrapes, any interval
+                                                          │
+                                                     Prometheus ──▶ alerts (prometheus/alerts.yml)
+                                                          │
+                                                          ▼
+                                                       Grafana        5 dashboards (grafana-dashboards/)
+```
+
+So scraping more often costs no API requests, slowly changing data (prices, SSH keys) is fetched
+less often, and `hetzner_cloud_exporter_last_poll_success` and the included alerts show when
+polling fails.
 
 ## Features
 
@@ -22,6 +59,7 @@ background and stays within the API rate limit, however often Prometheus scrapes
 - TLS and basic auth via the standard Prometheus web config file
 - Five Grafana dashboards (Load Balancers, servers, costs, inventory, exporter health) and 34
   Prometheus alerts, each with promtool unit tests
+- Binaries for Linux, macOS and Windows (amd64, arm64) and a multi-arch Docker image
 
 ## Quick start
 
@@ -303,6 +341,12 @@ project, never mix).
 | `grafana_inventory_dashboard.json` | Tables of servers, certificates, Storage Boxes, volumes, IPs, snapshots |
 | `grafana_exporter_dashboard.json` | Exporter health: polls, API requests, rate limit |
 
+| Costs | Servers |
+|---|---|
+| ![Costs dashboard](.github/images/costs.png) | ![Servers dashboard](.github/images/servers.png) |
+| **Inventory** | **Exporter health** |
+| ![Inventory dashboard](.github/images/inventory.png) | ![Exporter dashboard](.github/images/exporter.png) |
+
 ## Development
 
 ```sh
@@ -316,8 +360,12 @@ docker run --rm -v "$PWD/grafana-dashboards/test:/rules:ro" -w /rules --entrypoi
   prom/prometheus:v3.15.0 test rules dashboards_test.yml   # every dashboard query, see CONTRIBUTING.md
 ```
 
+## Security
+
+Use a **read-only** API token: the exporter never writes. Report security problems privately as
+described in [SECURITY.md](SECURITY.md), not in a public issue.
+
 ## License
 
 Apache License 2.0, © 2025-2026 SmartEcho d.o.o., see [LICENSE](LICENSE) and [NOTICE](NOTICE).
-Bugs and questions: [GitHub Issues](https://github.com/smartecho-hr/hetzner_cloud_exporter/issues);
-security problems privately, see [SECURITY.md](SECURITY.md).
+Bugs and questions: [GitHub Issues](https://github.com/smartecho-hr/hetzner_cloud_exporter/issues).
